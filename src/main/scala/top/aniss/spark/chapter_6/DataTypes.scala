@@ -5,30 +5,172 @@ import org.apache.spark.sql.functions._
 
 object DataTypes {
 
+
     def main(args: Array[String]): Unit = {
         val spark = SparkSession.builder().master("local[4]").appName("DataTypes").getOrCreate()
         //booleanExpr(spark)
         //numbers(spark)
         //strings(spark)
         //RegularExpr(spark)
-        Dates(spark)
+        //Dates(spark)
+        //nullException(spark)
+        complexTypes(spark)
 
         spark.close()
     }
 
+    def complexTypes(spark: SparkSession): Unit = {
+        val df = spark.read.option("header", "true")
+            .csv("/home/andy/IdeaProjects/SparkDefinitiveGuide/data/retail-data/by-day/2010-12-01.csv")
+        df.printSchema()
+
+        // struct
+        df.selectExpr("(Description, InvoiceNo) as complex", "*").show(false)
+        df.selectExpr("struct(Description, InvoiceNo) as complex", "*").show(false)
+
+        val complexDF = df.select(struct("Description", "InvoiceNo").alias("complex"), col("*"))
+        complexDF.show(false)
+
+        complexDF.select("complex.Description").show(false)
+
+        complexDF.select("complex.*").show(false)
+
+        //Arrays
+        val df_array = df.select(split(col("Description"), " ").alias("array_col"))
+        df_array.show(2, false)
+        df_array.selectExpr("array_col[0]").show(2, false)
+        //Array Length
+        df_array.select(col("array_col"), size(col("array_col"))).show(2, false)
+        //array_contains
+        df_array.select(col("array_col"), array_contains(col("array_col"), "WHITE"))
+            .show(2, false)
+
+        //explode - Creates a new row for each element in the given array or map column.
+        val df_explode = df.withColumn("splitted", split(col("Description"), " "))
+            .withColumn("exploded", explode(col("splitted")))
+        df_explode.show(10, false)
+        df_explode.select("Description", "splitted", "exploded").show(10, false)
+
+
+        //Maps
+    }
+
+    def nullException(spark: SparkSession): Unit = {
+        val df = spark.read.option("header", "true")
+            .csv("/home/andy/IdeaProjects/SparkDefinitiveGuide/data/retail-data/by-day/2010-12-01.csv")
+        df.printSchema()
+
+        df.select(coalesce(col("Description"), col("CustomerId"))).show(false)
+
+        df.createTempView("dfTable")
+        spark.sql(
+            """
+              |SELECT
+              |ifnull(null, 'return_value'),
+              |nullif('value', 'value'),
+              |nvl(null, 'return_value'),
+              |nvl2('not null', 'return_value', 'else_value'),
+              |nvl2(null, 'return_value', 'else_value')
+              |FROM dfTable
+            """.stripMargin).show(1)
+
+        // Dropping rows containing any null values.
+        df.na.drop().show(false)
+        // any - 如果一行中有任意一个值为空, 就drop掉
+        df.na.drop("any").show(10, false)
+        // all - 一行中所有的值都为空, 才会drop掉
+        df.na.drop("all").show(10, false)
+
+        // If `how` is "all", then drop rows only if every `specified column` is null or NaN for that row.
+        df.na.drop("all", Seq("StockCode", "InvoiceNo")).show(10, false)
+
+        df.na.fill("All Null values become this string").filter(col("Description").contains("All"))
+            .show(100, false)
+
+        // fill specified column, other columns not to be filled
+        df.na.fill("All Null values become this string", Seq("Description")).filter(col("Description").contains("All"))
+            .show(100, false)
+
+        // fill some columns with Map
+        val fillColValues = Map("CustomerID" -> 5, "Description" -> "No Value")
+        val df3 = df.na.fill(fillColValues).filter(col("Description").contains("No Value").or(col("CustomerID").equalTo(5)))
+        df3.show(10, false)
+
+
+        //replace : value should be the same type
+        df3.na.replace("Description", Map("No Value" -> "UNKNOWN")).filter(col("Description").contains("UNKNOWN")).show(1000, false)
+
+
+        // Ordering NUll
+        // asc_nulls_first, desc_nulls_first, asc_nulls_last, or desc_nulls_last
+        df.orderBy(asc_nulls_first("Description")).show(100, false)
+        df.orderBy(asc_nulls_last("Description")).show(100, false)
+        df.orderBy(desc_nulls_first("Description")).show(100, false)
+        df.orderBy(desc_nulls_last("Description")).show(100, false)
+
+    }
+
+
     def Dates(spark: SparkSession) = {
+        import spark.implicits._
 
         val df = spark.read.option("header", "true")
             .csv("/home/andy/IdeaProjects/SparkDefinitiveGuide/data/retail-data/by-day/2010-12-01.csv")
         df.printSchema()
+
+        //root
+        //|-- InvoiceNo: string (nullable = true)
+        //|-- StockCode: string (nullable = true)
+        //|-- Description: string (nullable = true)
+        //|-- Quantity: string (nullable = true)
+        //|-- InvoiceDate: string (nullable = true)     // NOT timestamp
+        //|-- UnitPrice: string (nullable = true)
+        //|-- CustomerID: string (nullable = true)
+        //|-- Country: string (nullable = true)
+
+
         df.show(3, false)
 
         val dateDF = spark.range(1000)
             .withColumn("today", current_date())
             .withColumn("now", current_timestamp())
-        dateDF.show(1000, false)
+        dateDF.show(3, false)
         dateDF.createOrReplaceTempView("dateTable")
         dateDF.printSchema()
+
+        // 加减天数, 计算两个date相差的天数
+        dateDF.select($"today",
+            date_sub($"today", 5).alias("today-5"), // 减5天
+            date_add($"today", 5).alias("today+5")) // 加5天
+            .select($"today-5", $"today+5",
+            datediff($"today+5", $"today-5").alias("diff") // 相减
+        ).show(3)
+
+        dateDF.withColumn("week_ago", date_sub($"today", 7))
+            .select(datediff($"week_ago", $"today")).show(1)
+
+        //The to_date function allows you to convert a string to a date
+        val dateDF2 = dateDF.select(to_date(lit("2018-10-10")).alias("start"),
+            to_date(lit("2019-06-19")).alias("end"))
+
+        dateDF2.select(months_between($"end", $"start")).show(3)
+
+        spark.range(1).withColumn("date", lit("2017-01-01"))
+            .select(to_date(col("date"))).show()
+
+        // Spark 不能解析year-day-month, 这种格式会返回null, 不会返回Exception
+        // 如果year-day-month这种格式看起来和year-month-day一样, 则会解析错误.
+        // 下面的时间是2016年12月20和2017年11月12日. 第一个解析成null, 第二个解析成了2017年12月11日, 解析出问题 - -
+        dateDF.select(to_date(lit("2016-20-12")), to_date(lit("2017-12-11"))).show(1)
+
+        // 使用to_date和to_timestamp 解决上面的问题, Spark 2.2.0以后可用
+        //val dateFormat = "yyyy-dd-MM"
+        //dateDF.select(to_date(lit("2016-20-12"), dateFormat), to_date(lit("2017-12-11"), dateFormat)).show(1)
+        //dateDF.withColumn("date", to_date(lit("2016-20-12"), dateFormat))
+        //    .select($"date", to_utc_timestamp($"date", dateFormat)).show(false)
+
+        dateDF2.filter($"start" > lit("2017-10-10")).show()
+        dateDF2.filter($"start" > "'2017-12-12'").show()
 
     }
 

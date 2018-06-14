@@ -4,6 +4,8 @@ target/
 
 .svn/
 
+data
+
 pom.xml.tag
 
 pom.xml.releaseBackup
