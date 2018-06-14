@@ -1,6 +1,6 @@
 package top.aniss.spark.chapter_6
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{Column, SparkSession}
 import org.apache.spark.sql.functions._
 
 object DataTypes {
@@ -14,9 +14,54 @@ object DataTypes {
         //RegularExpr(spark)
         //Dates(spark)
         //nullException(spark)
-        complexTypes(spark)
+        //complexTypes(spark)
+        //workWithJson(spark)
+
+        UDF(spark)
 
         spark.close()
+    }
+
+
+    def UDF(spark: SparkSession): Unit = {
+        //定义函数
+        def power3(number: Double): Double = number * number * number
+
+        //将udf函数注册到spark
+        val power3udf = udf(power3(_: Double): Double)
+
+        val udfExampleDF = spark.range(5).toDF("num")
+        udfExampleDF.show(false)
+
+        //println(power3(2))
+        // 和使用Spark自带函数一样使用udf函数
+        udfExampleDF.select(power3udf(col("num"))).show(false)
+
+        // 将power3注册到Spark SQL
+        spark.udf.register("power3", power3(_: Double): Double)
+        udfExampleDF.selectExpr("num", "power3(num) as power3").show()
+        spark.sql("SELECT power3(2)").show()
+    }
+
+
+    def workWithJson(spark: SparkSession) = {
+
+        val df = spark.read.option("header", "true")
+            .csv("/home/andy/IdeaProjects/SparkDefinitiveGuide/data/retail-data/by-day/2010-12-01.csv")
+        df.printSchema()
+
+        val jsonDF = spark.range(1).selectExpr(
+            """
+              |'{"myJsonKey":{"myJsonValue":[1,2,3]}}' as jsonString
+            """.stripMargin)
+        jsonDF.show(false)
+
+        jsonDF.select(
+            get_json_object(col("jsonString"), "$.myJsonKey.myJsonValue[1]") as "column",
+            json_tuple(col("jsonString"), "myJsonKey")).show(2, false)
+
+        df.selectExpr("(InvoiceNo, Description) as myStruct", "InvoiceDate").select(to_json(col("myStruct")), col("InvoiceDate"))
+            .show(false)
     }
 
     def complexTypes(spark: SparkSession): Unit = {
